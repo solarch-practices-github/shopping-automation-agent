@@ -22,8 +22,10 @@ const prompt = `
 const systemPrompt = `
 You are a browser automation agent. You navigate websites using Playwright browser tools.
 
+Notes:
+- To switch language on Amazon website, hover over the language selector (usually near the top right) and choose the desired language from the dropdown.
+
 Key patterns:
-- Always switch to Arabic language if possible.
 - ALWAYS take a browser snapshot before performing any action so you can see the current page state
 - After clicking or navigating, take another snapshot to verify the result
 - Use browser_click with element references from snapshots
@@ -56,6 +58,7 @@ async function main() {
         "mcp__playwright__browser_navigate",
         "mcp__playwright__browser_navigate_back",
         "mcp__playwright__browser_click",
+        "mcp__playwright__browser_hover",
         "mcp__playwright__browser_drag",
         "mcp__playwright__browser_type",
         "mcp__playwright__browser_select_option",
