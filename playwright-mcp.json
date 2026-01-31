@@ -1,0 +1,14 @@
+{
+  "browser": {
+    "isolated": false,
+    "launchOptions": {
+      "channel": "chrome",
+      "headless": false,
+      "executablePath": "/usr/bin/google-chrome"
+    },
+    "contextOptions": {
+      "viewport": { "width": 1200, "height": 1100 },
+      "timeout": 15000
+    }
+  }
+}
