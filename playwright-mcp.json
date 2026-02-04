@@ -4,11 +4,21 @@
     "launchOptions": {
       "channel": "chrome",
       "headless": false,
-      "executablePath": "/usr/bin/google-chrome"
+      "executablePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     },
     "contextOptions": {
-      "viewport": { "width": 1200, "height": 1100 },
+      "viewport": {
+        "width": 1200,
+        "height": 1100
+      },
       "timeout": 15000
     }
+  },
+  "interaction": {
+    "maxActions": 50,
+    "maxNavigationDepth": 10,
+    "requireVisibleElement": true,
+    "clickTimeoutMs": 5000,
+    "typeDelayMs": 30
   }
 }

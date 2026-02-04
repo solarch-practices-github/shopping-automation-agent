@@ -16,6 +16,7 @@ Create `.env` with the following variables:
 
 ```
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
+CHROME_EXECUTABLE_PATH=your_path_to_chrome_here
 ```
 
 Check `playwright-mcp.json`: make sure browser path is correct for your system.
