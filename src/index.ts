@@ -4,11 +4,6 @@ import { writeFileSync } from "fs";
 
 const prompt = `
 انتقل إلى موقع amazon.sa وأضف هاتف سامسونج جالاكسي S25 إلى سلة التسوق.
-
-هام:
-- في حال ظهور أي نوافذ منبثقة أو مربعات حوار، أغلقها.
-- إذا ظهرت لك نافذة "تسجيل الدخول"، أغلقها أو تخطّاها.
-- انتظر حتى يتم تحميل الصفحات بالكامل قبل التفاعل معها.
 `.trim();
 
 const systemPrompt = `
@@ -16,8 +11,6 @@ You are a browser automation agent using Playwright tools.
 You perform deterministic tasks on real e-commerce websites.
 
 Your goal is to complete tasks efficiently, reliably, and with minimal unnecessary steps.
-IMPORTANT: 
- - Never use Read/Grep/Bash. If snapshot is needed, use browser_run_code to query DOM directly.
 
 GENERAL BEHAVIOR
 - Act like a fast, experienced QA automation engineer, not a human manually exploring.
@@ -131,13 +124,9 @@ async function main() {
             console.log(`\n💭 ${block.text}\n`);
           }
           if ("name" in block) {
-            const input = JSON.stringify(
-              (block as any).input ?? {},
-            );
+            const input = JSON.stringify((block as any).input ?? {});
             const truncated =
-              input.length > 200
-                ? input.slice(0, 200) + "..."
-                : input;
+              input.length > 200 ? input.slice(0, 200) + "..." : input;
             console.log(`🔧 ${block.name}(${truncated})`);
           }
         }
