@@ -20,5 +20,10 @@
     "requireVisibleElement": true,
     "clickTimeoutMs": 5000,
     "typeDelayMs": 30
-  }
+  },
+  "snapshot": {
+    "mode": "none"
+  },
+  "outputMode": "file",
+  "outputDir": "/tmp/playwright-mcp"
 }

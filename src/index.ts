@@ -1,108 +1,49 @@
 import "dotenv/config";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { writeFileSync } from "fs";
+import { browserAgent } from "./browserAgent";
+import { writeFileSync, appendFileSync } from "fs";
 
 const prompt = `
 انتقل إلى موقع amazon.sa وأضف هاتف سامسونج جالاكسي S25 إلى سلة التسوق.
 `.trim();
 
-const systemPrompt = `
-You are a browser automation agent using Playwright tools.
-You perform deterministic tasks on real e-commerce websites.
+const orchestratorPrompt = `
+You are an orchestrator agent responsible for managing shopping automation tasks.
 
-Your goal is to complete tasks efficiently, reliably, and with minimal unnecessary steps.
+Your role is to:
+1. Understand user requests for online shopping tasks
+2. Delegate browser automation work to the browser agent
+3. Coordinate multiple steps if needed
+4. Report results back to the user
 
-GENERAL BEHAVIOR
-- Act like a fast, experienced QA automation engineer, not a human manually exploring.
-- Prefer direct, robust actions over exploratory or trial-and-error behavior.
-- Avoid unnecessary narration or explanation during execution.
+When you receive a shopping task:
+- Analyze what needs to be done
+- Delegate the browser automation to the browser agent by providing clear, specific instructions
+- The browser agent handles all web interactions using Playwright
+- You focus on high-level coordination and result synthesis
 
-PAGE LOADING & STATE
-- Always ensure the page is ready before interacting.
-- Treat navigation events and major page changes as state boundaries.
-- Only re-inspect the page when the state has clearly changed or required elements are missing.
-
-OBSERVATION STRATEGY
-- Do NOT repeatedly inspect the page if the required element is already known.
-- Prefer acting based on existing knowledge rather than re-reading the page.
-- When inspection is needed, focus only on elements relevant to the current step
-  (search input, product link, add-to-cart button, modal close, cart access).
-
-INTERACTION STRATEGY
-- Prefer single, well-targeted actions over multiple small attempts.
-- If an interaction might fail due to visibility or overlays, scroll into view first.
-- If an action fails once, try one alternative approach, then reassess the page state.
-
-MACRO ACTIONS
-- When a sequence is stable and obvious, combine it into one logical step
-  (e.g. find search input → type query → submit).
-- Use browser_run_code when it can reduce multiple interactions into one safe operation.
-
-VERIFICATION
-- Never assume an action succeeded.
-- Verify important outcomes using page state:
-  - confirmation messages
-  - cart count changes
-  - presence of the expected product
-- Prefer DOM-based checks over screenshots.
-
-MODALS & OVERLAYS
-- Detect and dismiss blocking modals only when they interfere with the next action.
-- Do not aggressively search for modals if the page is usable.
-
-OUTPUT STYLE
-- During execution, respond primarily with tool calls.
-- Keep explanations minimal and functional.
-- Provide a short, clear summary only after the task is completed or blocked.
+Keep your responses clear and concise.
 `.trim();
 
 async function main() {
-  console.log("Starting shopping automation agent...\n");
-  // Generate playwright config from environment
-  const chromeExecutable =
-    process.env.CHROME_EXECUTABLE_PATH ||
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-
-  const playwrightConfig = {
-    browser: {
-      isolated: false,
-      launchOptions: {
-        channel: "chrome",
-        headless: false,
-        executablePath: chromeExecutable,
-      },
-      contextOptions: {
-        viewport: { width: 1200, height: 1100 },
-        timeout: 15000,
-      },
-    },
-    interaction: {
-      maxActions: 50,
-      maxNavigationDepth: 10,
-      requireVisibleElement: true,
-      clickTimeoutMs: 5000,
-      typeDelayMs: 30,
-    },
-  };
-
-  writeFileSync(
-    "playwright-mcp.json",
-    JSON.stringify(playwrightConfig, null, 2),
-  );
-
   const startTime = Date.now();
+  const logFile = "conversation.log";
+
+  // Initialize log file
+  writeFileSync(
+    logFile,
+    `=== Conversation Log - ${new Date().toISOString()} ===\n\n`,
+  );
 
   const conversation = query({
     prompt,
     options: {
       model: "claude-haiku-4-5-20251001",
-      systemPrompt,
-      mcpServers: {
-        playwright: {
-          command: "npx",
-          args: ["@playwright/mcp@latest", "--config", "playwright-mcp.json"],
-        },
+      systemPrompt: orchestratorPrompt,
+      agents: {
+        browser: browserAgent,
       },
+      disallowedTools: ["Read"],
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       maxTurns: 40,
@@ -110,6 +51,10 @@ async function main() {
   });
 
   for await (const message of conversation) {
+    // Log all messages to file
+    appendFileSync(logFile, `\n--- Message Type: ${message.type} ---\n`);
+    appendFileSync(logFile, JSON.stringify(message, null, 2) + "\n");
+
     switch (message.type) {
       case "system":
         if (message.subtype === "init") {
