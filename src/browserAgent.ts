@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { Agent, MCPServerStdio, type MCPServer } from "@openai/agents";
+import { Agent, MCPServerSSE, MCPServerStdio, type MCPServer } from "@openai/agents";
 import { writeFileSync } from "fs";
 
 const BROWSER_SYSTEM_PROMPT = `
@@ -92,23 +92,22 @@ export function createPlaywrightMcpServer() {
       clickTimeoutMs: 5000,
       typeDelayMs: 30,
     },
-    outputMode: "file",
     outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "/tmp/playwright-mcp",
   };
 
   writeFileSync("playwright-mcp.json", JSON.stringify(playwrightConfig, null, 2));
 
-  // return new MCPServerSSE({
-  //   name: "playwright",
-  //   url: "http://localhost:8931/sse",
-  // });
+  return new MCPServerSSE({
+    name: "playwright",
+    url: "http://localhost:8931/sse",
+  });
 
   // STDIO option (kept for later use)
-  return new MCPServerStdio({
-    name: "playwright",
-    command: "npx",
-    args: ["@playwright/mcp@v0.0.64", "--config", "playwright-mcp.json"],
-  });
+  // return new MCPServerStdio({
+  //   name: "playwright",
+  //   command: "npx",
+  //   args: ["@playwright/mcp@v0.0.64", "--config", "playwright-mcp.json"],
+  // });
 }
 
 export function createBrowserAgent(mcpServers: MCPServer[]) {

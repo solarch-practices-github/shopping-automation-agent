@@ -108,6 +108,7 @@ async function main() {
     });
     const browserAgent = createBrowserAgent(mcpServers.active);
     const validatorAgent = createValidatorAgent("gpt-5.2");
+    console.log("Starting orchestrator agent...");
 
     const browserTool = tool({
       name: "browser_agent",
@@ -119,6 +120,7 @@ async function main() {
           .describe("Instruction for the browser agent to execute"),
       }),
       execute: async ({ input }) => {
+        console.log("Invoking browser agent tool...");
         const result = await run(browserAgent, input, {
           maxTurns: 50,
           stream: true,
@@ -131,15 +133,22 @@ async function main() {
             console.log(`[browser][agent] ${event.agent.name}`);
           } else if (event.type === "raw_model_stream_event") {
             const data: any = event.data;
-            if (data?.type === "output_text_delta") {
+            const eventType = typeof data?.type === "string" ? data.type : "unknown";
+            const modelName =
+              typeof data?.model === "string"
+                ? data.model
+                : typeof data?.response?.model === "string"
+                  ? data.response.model
+                  : "unknown";
+            if (eventType === "output_text_delta") {
               const delta = typeof data.delta === "string" ? data.delta : "";
               const preview =
                 delta.length > 120 ? `${delta.slice(0, 120)}...` : delta;
-              console.log(`[browser][raw] output_text_delta: ${preview}`);
-            } else if (data?.type) {
-              console.log(`[browser][raw] ${data.type}`);
+              console.log(
+                `[browser][raw] model=${modelName} event=${eventType} preview="${preview}"`,
+              );
             } else {
-              console.log("[browser][raw] model stream event");
+              console.log(`[browser][raw] model=${modelName} event=${eventType}`);
             }
           }
         }
@@ -217,14 +226,21 @@ async function main() {
         console.log(`[agent] ${event.agent.name}`);
       } else if (event.type === "raw_model_stream_event") {
         const data: any = event.data;
-        if (data?.type === "output_text_delta") {
+        const eventType = typeof data?.type === "string" ? data.type : "unknown";
+        const modelName =
+          typeof data?.model === "string"
+            ? data.model
+            : typeof data?.response?.model === "string"
+              ? data.response.model
+              : "unknown";
+        if (eventType === "output_text_delta") {
           const delta = typeof data.delta === "string" ? data.delta : "";
           const preview = delta.length > 120 ? `${delta.slice(0, 120)}...` : delta;
-          console.log(`[raw] output_text_delta: ${preview}`);
-        } else if (data?.type) {
-          console.log(`[raw] ${data.type}`);
+          console.log(
+            `[raw] model=${modelName} event=${eventType} preview="${preview}"`,
+          );
         } else {
-          console.log("[raw] model stream event");
+          console.log(`[raw] model=${modelName} event=${eventType}`);
         }
       }
     }
