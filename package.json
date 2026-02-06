@@ -9,7 +9,11 @@
     "@anthropic-ai/claude-agent-sdk": "^0"
   },
   "devDependencies": {
+    "@ai-sdk/gateway": "^3.0.36",
+    "@ai-sdk/mcp": "^1.0.18",
     "@types/node": "^22",
+    "ai": "^6.0.73",
+    "dotenv": "^17.2.4",
     "tsx": "^4",
     "typescript": "^5"
   }
