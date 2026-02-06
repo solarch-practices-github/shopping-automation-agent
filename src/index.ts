@@ -1,11 +1,19 @@
 import "dotenv/config";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import {
+  AgentTool,
+  FunctionTool,
+  Gemini,
+  InMemoryMemoryService,
+  InMemorySessionService,
+  LlmAgent,
+  Runner,
+} from "@google/adk";
+import { Content } from "@google/genai";
+import { appendFileSync, readFileSync, writeFileSync } from "fs";
+import { z } from "zod";
 import { browserAgent } from "./browserAgent";
-import { writeFileSync, appendFileSync } from "fs";
-
-const prompt = `
-انتقل إلى موقع https://www.amazon.sa/?language=ar_AE وأضف هاتف سامسونج جالاكسي S25 إلى سلة التسوق.
-`.trim();
+import { fileURLToPath } from "url";
+import { resolve } from "path";
 
 const orchestratorPrompt = `
 You are an orchestrator agent responsible for managing shopping automation tasks.
@@ -54,122 +62,186 @@ The validation steps are NOT the overall workflow - they are REQUIRED GATES befo
 Keep your responses clear and concise. NEVER ask the user questions - make decisions autonomously.
 `.trim();
 
-async function main() {
+const validatorModel = new Gemini({ model: "gemini-2.5-flash" });
+
+const validateUserActionTool = new FunctionTool({
+  name: "validate_user_action",
+  description:
+    "Validates a user action against expected behavior defined in a JSON file.",
+  parameters: z.object({
+    json_file_path: z.string(),
+    user_action: z.string(),
+    context: z.string().optional(),
+  }),
+  execute: async (input) => {
+    try {
+      const jsonContent = readFileSync(input.json_file_path, "utf-8");
+      const validationData = JSON.parse(jsonContent);
+
+      const validationPrompt = `
+You are a validation assistant. Analyze whether the user action matches the expected behavior.
+
+**Validation Rules/Expected Behavior:**
+${JSON.stringify(validationData, null, 2)}
+
+**User Action:**
+${input.user_action}
+
+${input.context ? `**Additional Context:**\n${input.context}` : ""}
+
+**Task:**
+Validate whether the user action:
+1. Matches the expected behavior
+2. Follows the rules defined in the validation data
+3. Is appropriate given the context
+
+Respond with:
+- "VALID" if the action matches expectations
+- "INVALID" if the action doesn't match
+- Brief explanation of your reasoning
+
+Format your response as JSON:
+{
+  "status": "VALID" or "INVALID",
+  "reasoning": "explanation here",
+  "suggestions": "optional suggestions if invalid"
+}
+`.trim();
+
+      const llmRequest = {
+        model: "gemini-2.5-flash",
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: validationPrompt }],
+          },
+        ],
+        config: {
+          responseMimeType: "application/json",
+        },
+        liveConnectConfig: {},
+        toolsDict: {},
+      };
+
+      let responseText = "";
+      let usageMetadata: {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        totalTokenCount?: number;
+      } | null = null;
+
+      for await (const chunk of validatorModel.generateContentAsync(llmRequest)) {
+        if (chunk.content?.parts) {
+          responseText += chunk.content.parts
+            .map((part) => part.text ?? "")
+            .join("");
+        }
+        if (chunk.usageMetadata) {
+          usageMetadata = chunk.usageMetadata;
+        }
+      }
+
+      const trimmedResponse = responseText.trim();
+      let validationResult;
+      try {
+        validationResult = JSON.parse(trimmedResponse);
+      } catch {
+        validationResult = {
+          status: "UNKNOWN",
+          reasoning: trimmedResponse,
+        };
+      }
+
+      return {
+        validation_result: validationResult,
+        json_file_used: input.json_file_path,
+        tokens_used: usageMetadata
+          ? {
+              input: usageMetadata.promptTokenCount ?? 0,
+              output: usageMetadata.candidatesTokenCount ?? 0,
+              total: usageMetadata.totalTokenCount ?? 0,
+            }
+          : undefined,
+      };
+    } catch (error: any) {
+      return {
+        error: `Validation failed: ${error.message || String(error)}`,
+      };
+    }
+  },
+});
+
+export const rootAgent = new LlmAgent({
+  name: "orchestrator",
+  description:
+    "Orchestrator agent that coordinates shopping automation and policy validation.",
+  model: "gemini-2.5-flash",
+  instruction: orchestratorPrompt,
+  tools: [new AgentTool({ agent: browserAgent }), validateUserActionTool],
+});
+
+async function runDemo(): Promise<void> {
+  const prompt = `
+انتقل إلى موقع https://www.amazon.sa/?language=ar_AE وأضف هاتف سامسونج جالاكسي S25 إلى سلة التسوق.
+`.trim();
+
   const startTime = Date.now();
   const logFile = "conversation.log";
+  const sessionService = new InMemorySessionService();
+  const memoryService = new InMemoryMemoryService();
+  const runner = new Runner({
+    appName: rootAgent.name,
+    agent: rootAgent,
+    sessionService,
+    memoryService,
+  });
 
-  // Initialize log file
   writeFileSync(
     logFile,
     `=== Conversation Log - ${new Date().toISOString()} ===\n\n`,
   );
 
-  const conversation = query({
-    prompt,
-    options: {
-      model: "claude-haiku-4-5-20251001",
-      systemPrompt: orchestratorPrompt,
-      agents: {
-        browser: browserAgent,
-      },
-      plugins: [
-        {
-          type: "local",
-          path: "./validation-plugin",
-        },
-      ],
-      disallowedTools: [
-        // "Task",
-        // "TaskOutput",
-        "Bash",
-        "Glob",
-        "Grep",
-        // "ExitPlanMode",
-        "Edit",
-        "Write",
-        "NotebookEdit",
-        "WebFetch",
-        // "TodoWrite",
-        "WebSearch",
-        "TaskStop",
-        "AskUserQuestion",
-        "Skill",
-        // "EnterPlanMode",
-        // "ToolSearch",
-      ],
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
-      maxTurns: 40,
-    },
+  const session = await sessionService.createSession({
+    appName: rootAgent.name,
+    userId: "local_user",
   });
 
-  for await (const message of conversation) {
-    // Log all messages to file
-    appendFileSync(logFile, `\n--- Message Type: ${message.type} ---\n`);
-    appendFileSync(logFile, JSON.stringify(message, null, 2) + "\n");
+  const newMessage: Content = {
+    role: "user",
+    parts: [{ text: prompt }],
+  };
 
-    switch (message.type) {
-      case "system":
-        if (message.subtype === "init") {
-          console.log(`Session: ${message.session_id}`);
-          console.log(`Model: ${message.model}\n`);
-        }
-        break;
+  for await (const event of runner.runAsync({
+    userId: session.userId,
+    sessionId: session.id,
+    newMessage,
+  })) {
+    appendFileSync(logFile, `\n--- Event ---\n`);
+    appendFileSync(logFile, JSON.stringify(event, null, 2) + "\n");
 
-      case "assistant":
-        for (const block of message.message.content) {
-          if ("text" in block && block.text) {
-            console.log(`\n💭 ${block.text}\n`);
-          }
-          if ("name" in block) {
-            const input = JSON.stringify((block as any).input ?? {});
-            const truncated =
-              input.length > 200 ? input.slice(0, 200) + "..." : input;
-            console.log(`🔧 ${block.name}(${truncated})`);
-          }
-        }
-        break;
-
-      case "result":
-        console.log("\n" + "=".repeat(60));
-        if (message.subtype === "success") {
-          console.log("✅ Agent finished successfully");
-          console.log(`\nResult: ${message.result}`);
-        } else {
-          console.log(`❌ Agent stopped: ${message.subtype}`);
-          if (message.errors?.length) {
-            console.log(`Errors: ${message.errors.join(", ")}`);
-          }
-        }
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`\nDuration: ${elapsed}s`);
-        console.log(`Cost: $${message.total_cost_usd.toFixed(4)}`);
-        console.log(`\nToken Usage:`);
-        console.log(`  Input: ${message.usage.input_tokens}`);
-        if (message.usage.cache_creation_input_tokens) {
-          console.log(
-            `  Cache creation: ${message.usage.cache_creation_input_tokens} (storing context for reuse, costs 25% more)`,
-          );
-        }
-        if (message.usage.cache_read_input_tokens) {
-          console.log(
-            `  Cache read: ${message.usage.cache_read_input_tokens} (reusing stored context, 90% cheaper)`,
-          );
-        }
-        console.log(`  Output: ${message.usage.output_tokens}`);
-        const totalInput =
-          message.usage.input_tokens +
-          (message.usage.cache_creation_input_tokens || 0) +
-          (message.usage.cache_read_input_tokens || 0);
-        console.log(`  Total input (including cache): ${totalInput}`);
-        console.log(`Turns: ${message.num_turns}`);
-        console.log("=".repeat(60));
-        break;
+    if (event.content?.parts?.length) {
+      const text = event.content.parts
+        .map((part) => part.text ?? "")
+        .join("")
+        .trim();
+      if (text) {
+        console.log(`\n💭 ${text}\n`);
+      }
     }
   }
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`\nDuration: ${elapsed}s`);
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
-});
+const isDirectRun =
+  typeof process !== "undefined" &&
+  process.argv[1] &&
+  resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+
+if (isDirectRun) {
+  runDemo().catch((err) => {
+    console.error("Fatal error:", err);
+    process.exit(1);
+  });
+}

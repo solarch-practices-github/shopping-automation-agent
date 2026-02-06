@@ -1,5 +1,5 @@
-import { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 import "dotenv/config";
+import { LlmAgent, MCPToolset, StdioConnectionParams } from "@google/adk";
 import { writeFileSync } from "fs";
 
 const BROWSER_SYSTEM_PROMPT = `
@@ -92,9 +92,6 @@ const playwrightConfig = {
     clickTimeoutMs: 5000,
     typeDelayMs: 30,
   },
-  // snapshot: {
-  //   mode: "none",
-  // },
   outputMode: "file",
   outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "/tmp/playwright-mcp",
 };
@@ -102,57 +99,22 @@ const playwrightConfig = {
 // Write config file once
 writeFileSync("playwright-mcp.json", JSON.stringify(playwrightConfig, null, 2));
 
-export const browserAgent: AgentDefinition = {
-  description:
-    "Browser automation agent that can navigate websites and perform actions using Playwright. Use this agent when you need to automate browser tasks like navigating websites, clicking buttons, filling forms, or adding items to shopping carts.",
-  prompt: BROWSER_SYSTEM_PROMPT,
-  model: "haiku" as const,
-  disallowedTools: [
-    // "Task",
-    // "TaskOutput",
-    "Bash",
-    "Glob",
-    "Grep",
-    // "ExitPlanMode",
-    "Edit",
-    "Write",
-    "NotebookEdit",
-    "WebFetch",
-    // "TodoWrite",
-    "WebSearch",
-    "TaskStop",
-    "AskUserQuestion",
-    "Skill",
-    // "EnterPlanMode",
-    // "ToolSearch",
-    "mcp__playwright__browser_resize",
-    "mcp__playwright__browser_console_messages",
-    "mcp__playwright__browser_handle_dialog",
-    "mcp__playwright__browser_evaluate",
-    "mcp__playwright__browser_file_upload",
-    // "mcp__playwright__browser_fill_form",
-    "mcp__playwright__browser_install",
-    // "mcp__playwright__browser_press_key",
-    // "mcp__playwright__browser_type",
-    // "mcp__playwright__browser_navigate",
-    // "mcp__playwright__browser_navigate_back",
-    "mcp__playwright__browser_network_requests",
-    "mcp__playwright__browser_run_code",
-    // "mcp__playwright__browser_take_screenshot",
-    // "mcp__playwright__browser_snapshot",
-    // "mcp__playwright__browser_click",
-    // "mcp__playwright__browser_drag",
-    // "mcp__playwright__browser_hover",
-    // "mcp__playwright__browser_select_option",
-    "mcp__playwright__browser_tabs",
-    // "mcp__playwright__browser_wait_for",
-  ],
-  mcpServers: [
-    {
-      playwright: {
-        command: "npx",
-        args: ["@playwright/mcp@v0.0.64", "--config", "playwright-mcp.json"],
-      },
-    },
-  ],
+const connectionParams: StdioConnectionParams = {
+  type: "StdioConnectionParams",
+  serverParams: {
+    command: "npx",
+    args: ["@playwright/mcp@v0.0.64", "--config", "playwright-mcp.json"],
+    env: process.env,
+  },
 };
+
+const mcpToolset = new MCPToolset(connectionParams);
+
+export const browserAgent = new LlmAgent({
+  name: "browser",
+  description:
+    "Browser automation agent that can navigate websites and perform actions using Playwright MCP tools.",
+  model: "gemini-2.5-flash",
+  instruction: BROWSER_SYSTEM_PROMPT,
+  tools: [mcpToolset],
+});
