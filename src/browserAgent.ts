@@ -1,3 +1,4 @@
+import { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 import "dotenv/config";
 import { writeFileSync } from "fs";
 
@@ -6,8 +7,7 @@ You are a browser automation agent using Playwright tools.
 You perform deterministic tasks on real e-commerce websites.
 
 Your goal is to complete tasks efficiently, reliably, and with minimal unnecessary steps.
-IMPORTANT: 
- - Never use Read/Grep/Bash. If snapshot is needed, use browser_run_code to query DOM directly.
+IMPORTANT:
  - When asked to extract product details, DO NOT add to cart yet - just gather information
  - AUTONOMOUS OPERATION: Make ALL decisions automatically, NEVER ask orchestrator or user for choices
  - When multiple options exist (colors, storage, etc.), pick the FIRST one that appears suitable
@@ -23,17 +23,6 @@ PRODUCT INFORMATION EXTRACTION
 - When asked to extract details from the CURRENT product page:
   * DO NOT navigate away or open new tabs
   * Stay on the current product page you're already viewing
-  * Use browser_run_code to query the DOM and extract ALL visible information:
-    - Product name/model (e.g., "Samsung Galaxy S25")
-    - Storage capacity (e.g., "256GB", "512GB")
-    - RAM if visible (e.g., "8GB", "12GB")
-    - Price in local currency
-    - Seller name (e.g., "Amazon", "Samsung Store")
-    - Condition (new/refurbished/used)
-    - Color
-    - Operating system if visible
-    - Any other specifications
-  * Report back in clear format: "Product details: [model], [storage], [RAM], [price], sold by [seller], [condition], [color]"
   * DO NOT click add to cart button yet
 - When explicitly asked to add to cart AFTER validation:
   * Click the add to cart button
@@ -67,7 +56,6 @@ VERIFICATION
   - confirmation messages
   - cart count changes
   - presence of the expected product
-- Prefer DOM-based checks over screenshots.
 
 MODALS & OVERLAYS
 - Detect and dismiss blocking modals only when they interfere with the next action.
@@ -104,27 +92,66 @@ const playwrightConfig = {
     clickTimeoutMs: 5000,
     typeDelayMs: 30,
   },
-  snapshot: {
-    mode: "none",
-  },
+  // snapshot: {
+  //   mode: "none",
+  // },
   outputMode: "file",
-  outputDir: "/tmp/playwright-mcp",
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "/tmp/playwright-mcp",
 };
 
 // Write config file once
 writeFileSync("playwright-mcp.json", JSON.stringify(playwrightConfig, null, 2));
 
-export const browserAgent = {
+export const browserAgent: AgentDefinition = {
   description:
     "Browser automation agent that can navigate websites and perform actions using Playwright. Use this agent when you need to automate browser tasks like navigating websites, clicking buttons, filling forms, or adding items to shopping carts.",
   prompt: BROWSER_SYSTEM_PROMPT,
   model: "haiku" as const,
-  disallowedTools: ["Read"],
+  disallowedTools: [
+    // "Task",
+    // "TaskOutput",
+    "Bash",
+    "Glob",
+    "Grep",
+    // "ExitPlanMode",
+    "Edit",
+    "Write",
+    "NotebookEdit",
+    "WebFetch",
+    // "TodoWrite",
+    "WebSearch",
+    "TaskStop",
+    "AskUserQuestion",
+    "Skill",
+    // "EnterPlanMode",
+    // "ToolSearch",
+    "mcp__playwright__browser_resize",
+    "mcp__playwright__browser_console_messages",
+    "mcp__playwright__browser_handle_dialog",
+    "mcp__playwright__browser_evaluate",
+    "mcp__playwright__browser_file_upload",
+    // "mcp__playwright__browser_fill_form",
+    "mcp__playwright__browser_install",
+    // "mcp__playwright__browser_press_key",
+    // "mcp__playwright__browser_type",
+    // "mcp__playwright__browser_navigate",
+    // "mcp__playwright__browser_navigate_back",
+    "mcp__playwright__browser_network_requests",
+    "mcp__playwright__browser_run_code",
+    // "mcp__playwright__browser_take_screenshot",
+    // "mcp__playwright__browser_snapshot",
+    // "mcp__playwright__browser_click",
+    // "mcp__playwright__browser_drag",
+    // "mcp__playwright__browser_hover",
+    // "mcp__playwright__browser_select_option",
+    "mcp__playwright__browser_tabs",
+    // "mcp__playwright__browser_wait_for",
+  ],
   mcpServers: [
     {
       playwright: {
         command: "npx",
-        args: ["@playwright/mcp@latest", "--config", "playwright-mcp.json"],
+        args: ["@playwright/mcp@v0.0.64", "--config", "playwright-mcp.json"],
       },
     },
   ],

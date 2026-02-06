@@ -4,7 +4,7 @@ import { browserAgent } from "./browserAgent";
 import { writeFileSync, appendFileSync } from "fs";
 
 const prompt = `
-انتقل إلى موقع amazon.sa وأضف هاتف سامسونج جالاكسي S25 إلى سلة التسوق.
+انتقل إلى موقع https://www.amazon.sa/?language=ar_AE وأضف هاتف سامسونج جالاكسي S25 إلى سلة التسوق.
 `.trim();
 
 const orchestratorPrompt = `
@@ -78,7 +78,25 @@ async function main() {
           path: "./validation-plugin",
         },
       ],
-      disallowedTools: ["Read"],
+      disallowedTools: [
+        // "Task",
+        // "TaskOutput",
+        "Bash",
+        "Glob",
+        "Grep",
+        // "ExitPlanMode",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        // "TodoWrite",
+        "WebSearch",
+        "TaskStop",
+        "AskUserQuestion",
+        "Skill",
+        // "EnterPlanMode",
+        // "ToolSearch",
+      ],
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       maxTurns: 40,

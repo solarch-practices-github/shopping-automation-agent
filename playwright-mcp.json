@@ -4,7 +4,7 @@
     "launchOptions": {
       "channel": "chrome",
       "headless": false,
-      "executablePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      "executablePath": "/usr/bin/google-chrome"
     },
     "contextOptions": {
       "viewport": {
@@ -21,9 +21,6 @@
     "clickTimeoutMs": 5000,
     "typeDelayMs": 30
   },
-  "snapshot": {
-    "mode": "none"
-  },
   "outputMode": "file",
-  "outputDir": "/tmp/playwright-mcp"
+  "outputDir": ".playwright-mcp"
 }
