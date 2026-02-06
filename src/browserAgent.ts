@@ -97,9 +97,26 @@ export function createPlaywrightMcpServer() {
 
   writeFileSync("playwright-mcp.json", JSON.stringify(playwrightConfig, null, 2));
 
+  const allowedBrowserTools = new Set([
+    "browser_close",
+    "browser_handle_dialog",
+    "browser_fill_form",
+    "browser_press_key",
+    "browser_type",
+    "browser_navigate",
+    "browser_navigate_back",
+    "browser_snapshot",
+    "browser_click",
+    "browser_drag",
+    "browser_hover",
+    "browser_select_option",
+    "browser_wait_for",
+  ]);
+
   return new MCPServerSSE({
     name: "playwright",
     url: "http://localhost:8931/sse",
+    toolFilter: (_context, tool) => Promise.resolve(allowedBrowserTools.has(tool.name)),
   });
 
   // STDIO option (kept for later use)
