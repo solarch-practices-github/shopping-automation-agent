@@ -1,7 +1,21 @@
 import "dotenv/config";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { browserAgent } from "./browserAgent";
-import { writeFileSync, appendFileSync } from "fs";
+import {
+  Agent,
+  RunContext,
+  Tool,
+  run,
+  tool,
+  connectMcpServers,
+} from "@openai/agents";
+import { z } from "zod";
+import { appendFileSync, writeFileSync } from "fs";
+import { createBrowserAgent, createPlaywrightMcpServer } from "./browserAgent";
+import { createValidationTool, createValidatorAgent } from "./validationTool";
+import {
+  formatUsd,
+  summarizeUsage,
+  type RunUsageSummary,
+} from "./runMetrics";
 
 const prompt = `
 انتقل إلى موقع https://www.amazon.sa/?language=ar_AE وأضف هاتف سامسونج جالاكسي S25 إلى سلة التسوق.
@@ -12,7 +26,7 @@ You are an orchestrator agent responsible for managing shopping automation tasks
 
 Your role is to:
 1. Understand user requests for online shopping tasks
-2. Delegate browser automation work to the browser agent
+2. Delegate browser automation work to the browser agent tool
 3. VALIDATE products against purchase policies before completing purchase
 4. Coordinate multiple steps if needed
 5. Report results back to the user
@@ -28,8 +42,9 @@ Your role is to:
 When you reach the point where you would normally add a product to cart, you MUST STOP and complete these required actions first:
 
 ACTION 1: Extract Complete Product Information
-- Tell the browser agent: "On the CURRENT product page you're already viewing, extract ALL product details visible on THIS page: model name, storage capacity, RAM, price, seller name, condition (new/used/refurbished), color, operating system, and any other specifications. DO NOT navigate away, DO NOT open new tabs, DO NOT add to cart - just read and report the details from the page you're on."
-- Wait for browser agent to return the full product specification summary
+- Call the browser agent tool with the instruction:
+  "On the CURRENT product page you're already viewing, extract ALL product details visible on THIS page: model name, storage capacity, RAM, price, seller name, condition (new/used/refurbished), color, operating system, and any other specifications. DO NOT navigate away, DO NOT open new tabs, DO NOT add to cart - just read and report the details from the page you're on."
+- Wait for the browser agent tool to return the full product specification summary
 
 ACTION 2: Validate Against Purchase Policies
 - Call the validate_user_action tool with:
@@ -41,7 +56,7 @@ ACTION 2: Validate Against Purchase Policies
 - Review the validation response carefully
 
 ACTION 3: Make Decision Based on Validation
-- If validation returns "VALID": Proceed to instruct browser agent to add product to cart
+- If validation returns "VALID": Proceed to instruct browser agent tool to add product to cart
 - If validation returns "INVALID": STOP immediately, do NOT add to cart, report violations to user
 
 **Example:**
@@ -54,117 +69,222 @@ The validation steps are NOT the overall workflow - they are REQUIRED GATES befo
 Keep your responses clear and concise. NEVER ask the user questions - make decisions autonomously.
 `.trim();
 
+type RunStats = {
+  subRuns: RunUsageSummary[];
+};
+
+function recordSubRun(stats: RunStats, summary: RunUsageSummary) {
+  stats.subRuns.push(summary);
+}
+
+function logRunResult(logFile: string, label: string, summary: RunUsageSummary) {
+  appendFileSync(
+    logFile,
+    [
+      "",
+      `--- ${label} ---`,
+      JSON.stringify(summary, null, 2),
+      "",
+    ].join("\n"),
+  );
+}
+
 async function main() {
   const startTime = Date.now();
   const logFile = "conversation.log";
+  const stats: RunStats = { subRuns: [] };
 
-  // Initialize log file
   writeFileSync(
     logFile,
-    `=== Conversation Log - ${new Date().toISOString()} ===\n\n`,
+    `=== Conversation Log - ${new Date().toISOString()} ===\n`,
   );
 
-  const conversation = query({
-    prompt,
-    options: {
-      model: "claude-haiku-4-5-20251001",
-      systemPrompt: orchestratorPrompt,
-      agents: {
-        browser: browserAgent,
+  const mcpServer = createPlaywrightMcpServer();
+  let mcpServers: Awaited<ReturnType<typeof connectMcpServers>> | null = null;
+
+  try {
+    mcpServers = await connectMcpServers([mcpServer], {
+      connectInParallel: true,
+    });
+    const browserAgent = createBrowserAgent(mcpServers.active);
+    const validatorAgent = createValidatorAgent("gpt-5.2");
+
+    const browserTool = tool({
+      name: "browser_agent",
+      description:
+        "Runs the browser automation agent to navigate sites and perform shopping actions.",
+      parameters: z.object({
+        input: z
+          .string()
+          .describe("Instruction for the browser agent to execute"),
+      }),
+      execute: async ({ input }) => {
+        const result = await run(browserAgent, input, {
+          maxTurns: 50,
+          stream: true,
+        });
+
+        for await (const event of result) {
+          if (event.type === "run_item_stream_event") {
+            console.log(`[browser][run-item] ${event.name}`);
+          } else if (event.type === "agent_updated_stream_event") {
+            console.log(`[browser][agent] ${event.agent.name}`);
+          } else if (event.type === "raw_model_stream_event") {
+            const data: any = event.data;
+            if (data?.type === "output_text_delta") {
+              const delta = typeof data.delta === "string" ? data.delta : "";
+              const preview =
+                delta.length > 120 ? `${delta.slice(0, 120)}...` : delta;
+              console.log(`[browser][raw] output_text_delta: ${preview}`);
+            } else if (data?.type) {
+              console.log(`[browser][raw] ${data.type}`);
+            } else {
+              console.log("[browser][raw] model stream event");
+            }
+          }
+        }
+
+        await result.completed;
+        const summary = summarizeUsage(
+          "browser",
+          browserAgent.model ?? "unknown",
+          result.state.usage,
+        );
+        recordSubRun(stats, summary);
+        logRunResult(logFile, "Browser Agent", summary);
+        return result.finalOutput ?? "No output from browser agent.";
       },
-      plugins: [
-        {
-          type: "local",
-          path: "./validation-plugin",
-        },
-      ],
-      disallowedTools: [
-        // "Task",
-        // "TaskOutput",
-        "Bash",
-        "Glob",
-        "Grep",
-        // "ExitPlanMode",
-        "Edit",
-        "Write",
-        "NotebookEdit",
-        "WebFetch",
-        // "TodoWrite",
-        "WebSearch",
-        "TaskStop",
-        "AskUserQuestion",
-        "Skill",
-        // "EnterPlanMode",
-        // "ToolSearch",
-      ],
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
+    });
+
+    const validationTool = createValidationTool({
+      validatorAgent,
+      recordSubRun: (summary) => {
+        recordSubRun(stats, summary);
+        logRunResult(logFile, "Validator", summary);
+      },
+      label: "validator",
+    });
+
+    const orchestrator = new Agent({
+      name: "Shopping Orchestrator",
+      instructions: orchestratorPrompt,
+      model: "gpt-5.2",
+      tools: [browserTool, validationTool],
+    });
+
+    orchestrator.on("agent_start", (_ctx: RunContext) => {
+      console.log("[hook] agent_start");
+    });
+    orchestrator.on("agent_end", (_ctx: RunContext, output: string) => {
+      console.log(`[hook] agent_end: ${output}`);
+    });
+    orchestrator.on(
+      "agent_handoff",
+      (_ctx: RunContext, nextAgent: Agent) => {
+        console.log(`[hook] agent_handoff -> ${nextAgent.name}`);
+      },
+    );
+    orchestrator.on(
+      "agent_tool_start",
+      (_ctx: RunContext, tool: Tool, details) => {
+        const toolCallName =
+          "toolCall" in details && details.toolCall && "name" in details.toolCall
+            ? details.toolCall.name
+            : "unknown";
+        console.log(`[hook] tool_start: ${tool.name} (${toolCallName})`);
+      },
+    );
+    orchestrator.on(
+      "agent_tool_end",
+      (_ctx: RunContext, tool: Tool, _result: string, details) => {
+        const toolCallName =
+          "toolCall" in details && details.toolCall && "name" in details.toolCall
+            ? details.toolCall.name
+            : "unknown";
+        console.log(`[hook] tool_end: ${tool.name} (${toolCallName})`);
+      },
+    );
+
+    const result = await run(orchestrator, prompt, {
       maxTurns: 40,
-    },
-  });
+      stream: true,
+    });
 
-  for await (const message of conversation) {
-    // Log all messages to file
-    appendFileSync(logFile, `\n--- Message Type: ${message.type} ---\n`);
-    appendFileSync(logFile, JSON.stringify(message, null, 2) + "\n");
-
-    switch (message.type) {
-      case "system":
-        if (message.subtype === "init") {
-          console.log(`Session: ${message.session_id}`);
-          console.log(`Model: ${message.model}\n`);
-        }
-        break;
-
-      case "assistant":
-        for (const block of message.message.content) {
-          if ("text" in block && block.text) {
-            console.log(`\n💭 ${block.text}\n`);
-          }
-          if ("name" in block) {
-            const input = JSON.stringify((block as any).input ?? {});
-            const truncated =
-              input.length > 200 ? input.slice(0, 200) + "..." : input;
-            console.log(`🔧 ${block.name}(${truncated})`);
-          }
-        }
-        break;
-
-      case "result":
-        console.log("\n" + "=".repeat(60));
-        if (message.subtype === "success") {
-          console.log("✅ Agent finished successfully");
-          console.log(`\nResult: ${message.result}`);
+    for await (const event of result) {
+      if (event.type === "run_item_stream_event") {
+        console.log(`[run-item] ${event.name}`);
+      } else if (event.type === "agent_updated_stream_event") {
+        console.log(`[agent] ${event.agent.name}`);
+      } else if (event.type === "raw_model_stream_event") {
+        const data: any = event.data;
+        if (data?.type === "output_text_delta") {
+          const delta = typeof data.delta === "string" ? data.delta : "";
+          const preview = delta.length > 120 ? `${delta.slice(0, 120)}...` : delta;
+          console.log(`[raw] output_text_delta: ${preview}`);
+        } else if (data?.type) {
+          console.log(`[raw] ${data.type}`);
         } else {
-          console.log(`❌ Agent stopped: ${message.subtype}`);
-          if (message.errors?.length) {
-            console.log(`Errors: ${message.errors.join(", ")}`);
-          }
+          console.log("[raw] model stream event");
         }
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`\nDuration: ${elapsed}s`);
-        console.log(`Cost: $${message.total_cost_usd.toFixed(4)}`);
-        console.log(`\nToken Usage:`);
-        console.log(`  Input: ${message.usage.input_tokens}`);
-        if (message.usage.cache_creation_input_tokens) {
-          console.log(
-            `  Cache creation: ${message.usage.cache_creation_input_tokens} (storing context for reuse, costs 25% more)`,
-          );
-        }
-        if (message.usage.cache_read_input_tokens) {
-          console.log(
-            `  Cache read: ${message.usage.cache_read_input_tokens} (reusing stored context, 90% cheaper)`,
-          );
-        }
-        console.log(`  Output: ${message.usage.output_tokens}`);
-        const totalInput =
-          message.usage.input_tokens +
-          (message.usage.cache_creation_input_tokens || 0) +
-          (message.usage.cache_read_input_tokens || 0);
-        console.log(`  Total input (including cache): ${totalInput}`);
-        console.log(`Turns: ${message.num_turns}`);
-        console.log("=".repeat(60));
-        break;
+      }
+    }
+
+    await result.completed;
+    const rootSummary = summarizeUsage(
+      "orchestrator",
+      orchestrator.model ?? "unknown",
+      result.state.usage,
+    );
+
+    logRunResult(logFile, "Orchestrator", rootSummary);
+
+    console.log(result.finalOutput ?? "No final output.");
+
+    const allSummaries = [rootSummary, ...stats.subRuns];
+    const totalRequests = allSummaries.reduce(
+      (sum, item) => sum + item.requests,
+      0,
+    );
+    const totalInputTokens = allSummaries.reduce(
+      (sum, item) => sum + item.inputTokens,
+      0,
+    );
+    const totalOutputTokens = allSummaries.reduce(
+      (sum, item) => sum + item.outputTokens,
+      0,
+    );
+    const totalTokens = allSummaries.reduce(
+      (sum, item) => sum + item.totalTokens,
+      0,
+    );
+    const totalCostUsd = allSummaries.some(
+      (item) => item.estimatedCostUsd === null,
+    )
+      ? null
+      : allSummaries.reduce(
+          (sum, item) => sum + (item.estimatedCostUsd ?? 0),
+          0,
+        );
+
+    console.log("\n=== Run Summary ===");
+    for (const summary of allSummaries) {
+      console.log(
+        `- ${summary.label} (${summary.model}): ${summary.requests} iterations, ${summary.inputTokens} input tokens (${summary.cachedInputTokens} cached), ${summary.outputTokens} output tokens, cost ${formatUsd(summary.estimatedCostUsd)}`,
+      );
+    }
+    console.log(
+      `Total iterations (root + sub-agents): ${totalRequests}`,
+    );
+    console.log(
+      `Total tokens: ${totalTokens} (input ${totalInputTokens}, output ${totalOutputTokens})`,
+    );
+    console.log(`Total estimated cost: ${formatUsd(totalCostUsd)}`);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`Duration: ${elapsed}s`);
+  } finally {
+    if (mcpServers) {
+      await mcpServers.close();
     }
   }
 }

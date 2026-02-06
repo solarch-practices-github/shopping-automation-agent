@@ -1,5 +1,5 @@
-import { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 import "dotenv/config";
+import { Agent, MCPServerStdio, type MCPServer } from "@openai/agents";
 import { writeFileSync } from "fs";
 
 const BROWSER_SYSTEM_PROMPT = `
@@ -67,92 +67,55 @@ OUTPUT STYLE
 - Provide a short, clear summary only after the task is completed or blocked.
 `.trim();
 
-// Generate playwright config from environment
-const chromeExecutable =
-  process.env.CHROME_EXECUTABLE_PATH ||
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+export function createPlaywrightMcpServer() {
+  const chromeExecutable =
+    process.env.CHROME_EXECUTABLE_PATH ||
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-const playwrightConfig = {
-  browser: {
-    isolated: false,
-    launchOptions: {
-      channel: "chrome",
-      headless: false,
-      executablePath: chromeExecutable,
-    },
-    contextOptions: {
-      viewport: { width: 1200, height: 1100 },
-      timeout: 15000,
-    },
-  },
-  interaction: {
-    maxActions: 50,
-    maxNavigationDepth: 10,
-    requireVisibleElement: true,
-    clickTimeoutMs: 5000,
-    typeDelayMs: 30,
-  },
-  // snapshot: {
-  //   mode: "none",
-  // },
-  outputMode: "file",
-  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "/tmp/playwright-mcp",
-};
-
-// Write config file once
-writeFileSync("playwright-mcp.json", JSON.stringify(playwrightConfig, null, 2));
-
-export const browserAgent: AgentDefinition = {
-  description:
-    "Browser automation agent that can navigate websites and perform actions using Playwright. Use this agent when you need to automate browser tasks like navigating websites, clicking buttons, filling forms, or adding items to shopping carts.",
-  prompt: BROWSER_SYSTEM_PROMPT,
-  model: "haiku" as const,
-  disallowedTools: [
-    // "Task",
-    // "TaskOutput",
-    "Bash",
-    "Glob",
-    "Grep",
-    // "ExitPlanMode",
-    "Edit",
-    "Write",
-    "NotebookEdit",
-    "WebFetch",
-    // "TodoWrite",
-    "WebSearch",
-    "TaskStop",
-    "AskUserQuestion",
-    "Skill",
-    // "EnterPlanMode",
-    // "ToolSearch",
-    "mcp__playwright__browser_resize",
-    "mcp__playwright__browser_console_messages",
-    "mcp__playwright__browser_handle_dialog",
-    "mcp__playwright__browser_evaluate",
-    "mcp__playwright__browser_file_upload",
-    // "mcp__playwright__browser_fill_form",
-    "mcp__playwright__browser_install",
-    // "mcp__playwright__browser_press_key",
-    // "mcp__playwright__browser_type",
-    // "mcp__playwright__browser_navigate",
-    // "mcp__playwright__browser_navigate_back",
-    "mcp__playwright__browser_network_requests",
-    "mcp__playwright__browser_run_code",
-    // "mcp__playwright__browser_take_screenshot",
-    // "mcp__playwright__browser_snapshot",
-    // "mcp__playwright__browser_click",
-    // "mcp__playwright__browser_drag",
-    // "mcp__playwright__browser_hover",
-    // "mcp__playwright__browser_select_option",
-    "mcp__playwright__browser_tabs",
-    // "mcp__playwright__browser_wait_for",
-  ],
-  mcpServers: [
-    {
-      playwright: {
-        command: "npx",
-        args: ["@playwright/mcp@v0.0.64", "--config", "playwright-mcp.json"],
+  const playwrightConfig = {
+    browser: {
+      isolated: false,
+      launchOptions: {
+        channel: "chrome",
+        headless: false,
+        executablePath: chromeExecutable,
+      },
+      contextOptions: {
+        viewport: { width: 1200, height: 1100 },
+        timeout: 15000,
       },
     },
-  ],
-};
+    interaction: {
+      maxActions: 50,
+      maxNavigationDepth: 10,
+      requireVisibleElement: true,
+      clickTimeoutMs: 5000,
+      typeDelayMs: 30,
+    },
+    outputMode: "file",
+    outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "/tmp/playwright-mcp",
+  };
+
+  writeFileSync("playwright-mcp.json", JSON.stringify(playwrightConfig, null, 2));
+
+  // return new MCPServerSSE({
+  //   name: "playwright",
+  //   url: "http://localhost:8931/sse",
+  // });
+
+  // STDIO option (kept for later use)
+  return new MCPServerStdio({
+    name: "playwright",
+    command: "npx",
+    args: ["@playwright/mcp@v0.0.64", "--config", "playwright-mcp.json"],
+  });
+}
+
+export function createBrowserAgent(mcpServers: MCPServer[]) {
+  return new Agent({
+    name: "Browser Agent",
+    instructions: BROWSER_SYSTEM_PROMPT,
+    model: "gpt-5-mini",
+    mcpServers,
+  });
+}
