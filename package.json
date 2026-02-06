@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
+    "debug": "tsx --inspect src/index.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

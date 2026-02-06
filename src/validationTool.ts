@@ -21,7 +21,6 @@ export function createValidatorAgent(model: string) {
       "If it complies, mark VALID and briefly explain.",
     ].join("\n"),
     model,
-    outputType: validationOutputSchema,
   });
 }
 

@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "attach",
+      "name": "Attach to npm run debug",
+      "port": 9229,
+      "restart": true,
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug: npm run debug",
+      "configurations": [
+        "Attach to npm run debug"
+      ],
+      "preLaunchTask": "npm: debug",
+      "stopAll": true
+    }
+  ]
+}

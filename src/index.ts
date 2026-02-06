@@ -4,13 +4,11 @@ import {
   RunContext,
   Tool,
   run,
-  tool,
   connectMcpServers,
 } from "@openai/agents";
-import { z } from "zod";
-import { appendFileSync, writeFileSync } from "fs";
+import { appendFileSync, readFileSync, writeFileSync } from "fs";
 import { createBrowserAgent, createPlaywrightMcpServer } from "./browserAgent";
-import { createValidationTool, createValidatorAgent } from "./validationTool";
+import { createValidatorAgent } from "./validationTool";
 import {
   formatUsd,
   summarizeUsage,
@@ -26,10 +24,14 @@ You are an orchestrator agent responsible for managing shopping automation tasks
 
 Your role is to:
 1. Understand user requests for online shopping tasks
-2. Delegate browser automation work to the browser agent tool
-3. VALIDATE products against purchase policies before completing purchase
+2. Delegate browser automation work to the Browser Agent via handoff
+3. VALIDATE products against purchase policies before completing purchase (handoff to Purchase Validator)
 4. Coordinate multiple steps if needed
 5. Report results back to the user
+
+If the request requires live browsing or cart actions, handoff to the Browser Agent immediately.
+The Browser Agent will perform the required validation via a handoff to the Purchase Validator
+before any add-to-cart action.
 
 **IMPORTANT: AUTONOMOUS OPERATION**
 - Make ALL decisions automatically based on purchase policies
@@ -42,21 +44,17 @@ Your role is to:
 When you reach the point where you would normally add a product to cart, you MUST STOP and complete these required actions first:
 
 ACTION 1: Extract Complete Product Information
-- Call the browser agent tool with the instruction:
+- Handoff to the Browser Agent with the instruction:
   "On the CURRENT product page you're already viewing, extract ALL product details visible on THIS page: model name, storage capacity, RAM, price, seller name, condition (new/used/refurbished), color, operating system, and any other specifications. DO NOT navigate away, DO NOT open new tabs, DO NOT add to cart - just read and report the details from the page you're on."
-- Wait for the browser agent tool to return the full product specification summary
+- Wait for the Browser Agent to return the full product specification summary
 
 ACTION 2: Validate Against Purchase Policies
-- Call the validate_user_action tool with:
-  {
-    "json_file_path": "purchase-rules.json",
-    "user_action": "Product found: [complete product details from browser agent]",
-    "context": "Pre-purchase validation check"
-  }
+- Handoff to the Purchase Validator with:
+  "User Action: Product found: [complete product details from browser agent]\nContext: Pre-purchase validation check"
 - Review the validation response carefully
 
 ACTION 3: Make Decision Based on Validation
-- If validation returns "VALID": Proceed to instruct browser agent tool to add product to cart
+- If validation returns "VALID": Proceed to handoff to the Browser Agent to add product to cart
 - If validation returns "INVALID": STOP immediately, do NOT add to cart, report violations to user
 
 **Example:**
@@ -68,14 +66,6 @@ The validation steps are NOT the overall workflow - they are REQUIRED GATES befo
 
 Keep your responses clear and concise. NEVER ask the user questions - make decisions autonomously.
 `.trim();
-
-type RunStats = {
-  subRuns: RunUsageSummary[];
-};
-
-function recordSubRun(stats: RunStats, summary: RunUsageSummary) {
-  stats.subRuns.push(summary);
-}
 
 function logRunResult(logFile: string, label: string, summary: RunUsageSummary) {
   appendFileSync(
@@ -92,7 +82,6 @@ function logRunResult(logFile: string, label: string, summary: RunUsageSummary) 
 async function main() {
   const startTime = Date.now();
   const logFile = "conversation.log";
-  const stats: RunStats = { subRuns: [] };
 
   writeFileSync(
     logFile,
@@ -108,77 +97,44 @@ async function main() {
     });
     const browserAgent = createBrowserAgent(mcpServers.active);
     const validatorAgent = createValidatorAgent("gpt-5.2");
+    const purchaseRules = readFileSync("purchase-rules.json", "utf-8");
+
+    browserAgent.instructions = [
+      typeof browserAgent.instructions === "string"
+        ? browserAgent.instructions
+        : "Follow the base browser instructions.",
+      "",
+      "VALIDATION HANDOFF",
+      "- Before adding any product to cart, handoff to Purchase Validator.",
+      "- Provide a concise product details summary (model, storage, RAM, price, seller, condition, color, OS, and any other specs).",
+      "- After the validator hands back a decision, only add to cart if it is VALID.",
+      "- If INVALID, stop and report the violations clearly.",
+    ].join("\n");
+
+    validatorAgent.instructions = [
+      typeof validatorAgent.instructions === "string"
+        ? validatorAgent.instructions
+        : "Follow the base validator instructions.",
+      "",
+      "PURCHASE RULES (JSON):",
+      purchaseRules,
+      "",
+      "HANDOFF BACK",
+      "- Always handoff back to Browser Agent after validation.",
+      "- Include a short decision message with: VALID/INVALID, reasoning, and a clear next step.",
+      "- If VALID, explicitly state approval to add to cart.",
+      "- If INVALID, instruct to stop and report violations.",
+    ].join("\n");
+
+    browserAgent.handoffs = [validatorAgent];
+    validatorAgent.handoffs = [browserAgent];
     console.log("Starting orchestrator agent...");
-
-    const browserTool = tool({
-      name: "browser_agent",
-      description:
-        "Runs the browser automation agent to navigate sites and perform shopping actions.",
-      parameters: z.object({
-        input: z
-          .string()
-          .describe("Instruction for the browser agent to execute"),
-      }),
-      execute: async ({ input }) => {
-        console.log("Invoking browser agent tool...");
-        const result = await run(browserAgent, input, {
-          maxTurns: 50,
-          stream: true,
-        });
-
-        for await (const event of result) {
-          if (event.type === "run_item_stream_event") {
-            console.log(`[browser][run-item] ${event.name}`);
-          } else if (event.type === "agent_updated_stream_event") {
-            console.log(`[browser][agent] ${event.agent.name}`);
-          } else if (event.type === "raw_model_stream_event") {
-            const data: any = event.data;
-            const eventType = typeof data?.type === "string" ? data.type : "unknown";
-            const modelName =
-              typeof data?.model === "string"
-                ? data.model
-                : typeof data?.response?.model === "string"
-                  ? data.response.model
-                  : "unknown";
-            if (eventType === "output_text_delta") {
-              const delta = typeof data.delta === "string" ? data.delta : "";
-              const preview =
-                delta.length > 120 ? `${delta.slice(0, 120)}...` : delta;
-              console.log(
-                `[browser][raw] model=${modelName} event=${eventType} preview="${preview}"`,
-              );
-            } else {
-              console.log(`[browser][raw] model=${modelName} event=${eventType}`);
-            }
-          }
-        }
-
-        await result.completed;
-        const summary = summarizeUsage(
-          "browser",
-          browserAgent.model ?? "unknown",
-          result.state.usage,
-        );
-        recordSubRun(stats, summary);
-        logRunResult(logFile, "Browser Agent", summary);
-        return result.finalOutput ?? "No output from browser agent.";
-      },
-    });
-
-    const validationTool = createValidationTool({
-      validatorAgent,
-      recordSubRun: (summary) => {
-        recordSubRun(stats, summary);
-        logRunResult(logFile, "Validator", summary);
-      },
-      label: "validator",
-    });
 
     const orchestrator = new Agent({
       name: "Shopping Orchestrator",
       instructions: orchestratorPrompt,
       model: "gpt-5.2",
-      tools: [browserTool, validationTool],
+      handoffs: [browserAgent, validatorAgent],
     });
 
     orchestrator.on("agent_start", (_ctx: RunContext) => {
@@ -224,24 +180,6 @@ async function main() {
         console.log(`[run-item] ${event.name}`);
       } else if (event.type === "agent_updated_stream_event") {
         console.log(`[agent] ${event.agent.name}`);
-      } else if (event.type === "raw_model_stream_event") {
-        const data: any = event.data;
-        const eventType = typeof data?.type === "string" ? data.type : "unknown";
-        const modelName =
-          typeof data?.model === "string"
-            ? data.model
-            : typeof data?.response?.model === "string"
-              ? data.response.model
-              : "unknown";
-        if (eventType === "output_text_delta") {
-          const delta = typeof data.delta === "string" ? data.delta : "";
-          const preview = delta.length > 120 ? `${delta.slice(0, 120)}...` : delta;
-          console.log(
-            `[raw] model=${modelName} event=${eventType} preview="${preview}"`,
-          );
-        } else {
-          console.log(`[raw] model=${modelName} event=${eventType}`);
-        }
       }
     }
 
@@ -256,7 +194,7 @@ async function main() {
 
     console.log(result.finalOutput ?? "No final output.");
 
-    const allSummaries = [rootSummary, ...stats.subRuns];
+    const allSummaries = [rootSummary];
     const totalRequests = allSummaries.reduce(
       (sum, item) => sum + item.requests,
       0,
