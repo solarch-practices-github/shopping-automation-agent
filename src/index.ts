@@ -1,8 +1,9 @@
 import "dotenv/config";
-import { stepCountIs, ToolLoopAgent } from "ai";
+import { stepCountIs, ToolLoopAgent, wrapLanguageModel } from "ai";
 import { createGateway } from "@ai-sdk/gateway";
 import { createPlaywrightMcpToolset } from "./playwright-mcp-tool";
 import { prompt, systemPrompt } from "./prompts";
+import { devToolsMiddleware } from "@ai-sdk/devtools";
 
 async function main() {
   const startTime = Date.now();
@@ -14,7 +15,10 @@ async function main() {
   });
 
   const browserAgent = new ToolLoopAgent({
-    model: gateway("google/gemini-2.5-flash"),
+    model: wrapLanguageModel({
+      model: gateway("google/gemini-2.5-flash"),
+      middleware: devToolsMiddleware(),
+    }),
     instructions: systemPrompt,
     tools,
   });
